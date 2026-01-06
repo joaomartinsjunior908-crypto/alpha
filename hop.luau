@@ -502,18 +502,6 @@ local function timeoutChecker()
         warn("[Server Hop] 5 seconds passed, forcing server hop...")
         forceServerHop()
     end
-    
-    -- Wait additional 5 seconds (total 10 seconds)
-    task.wait(5)
-    
-    -- Check if hopped after 10 seconds total
-    currentJobId = game.JobId
-    if not hasHopped and currentJobId == initialJobId then
-        warn("[Server Hop] 10 seconds passed without server hop, shutting down game...")
-        pcall(function()
-            game:Shutdown()
-        end)
-    end
 end
 
 task.spawn(startMarkOnlineLoop)
