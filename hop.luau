@@ -13,11 +13,15 @@ end
 
 local pid = game.PlaceId
 local job = game.JobId
+local initialJobId = job
 
 local name = "Unknown"
 if lp then
     name = lp.Name or lp.DisplayName or "Unknown"
 end
+
+local hasHopped = false
+local hopMutex = false
 
 local API_URL = "http://163.245.200.159:1000"
 local SECRET = "TESTING-NDKJSF351OLM12MM15409ASFJ"
@@ -116,6 +120,7 @@ end
 
 local function performTeleport(targetJobId)
     if targetJobId and targetJobId ~= "" then
+        hasHopped = true
         pcall(tps.TeleportToPlaceInstance, tps, pid, targetJobId, lp)
     end
 end
@@ -370,11 +375,35 @@ local function getNewJobId()
     return nil
 end
 
+local function forceServerHop()
+    if hopMutex then return end
+    hopMutex = true
+    
+    local newJobId = getNewJobId()
+    if newJobId then
+        performTeleport(newJobId)
+    else
+        -- If API fails, try multiple times quickly
+        for i = 1, 5 do
+            task.wait(0.1)
+            newJobId = getNewJobId()
+            if newJobId then
+                performTeleport(newJobId)
+                break
+            end
+        end
+    end
+    
+    hopMutex = false
+end
+
 local function serverHop()
     while true do
-        local newJobId = getNewJobId()
-        if newJobId then
-            performTeleport(newJobId)
+        if not hopMutex then
+            local newJobId = getNewJobId()
+            if newJobId then
+                performTeleport(newJobId)
+            end
         end
         task.wait(0.5)
     end
@@ -389,6 +418,17 @@ local function startMarkOnlineLoop()
     while true do
         task.wait(25)
         markOnline()
+    end
+end
+
+local function monitorJobId()
+    while true do
+        task.wait(0.5)
+        local currentJobId = game.JobId
+        if currentJobId ~= initialJobId then
+            hasHopped = true
+            break
+        end
     end
 end
 
@@ -453,5 +493,30 @@ local function startProcess()
     serverHop()
 end
 
+local function timeoutChecker()
+    -- Wait 5 seconds, then force hop
+    task.wait(5)
+    
+    local currentJobId = game.JobId
+    if not hasHopped and currentJobId == initialJobId then
+        warn("[Server Hop] 5 seconds passed, forcing server hop...")
+        forceServerHop()
+    end
+    
+    -- Wait additional 5 seconds (total 10 seconds)
+    task.wait(5)
+    
+    -- Check if hopped after 10 seconds total
+    currentJobId = game.JobId
+    if not hasHopped and currentJobId == initialJobId then
+        warn("[Server Hop] 10 seconds passed without server hop, shutting down game...")
+        pcall(function()
+            game:Shutdown()
+        end)
+    end
+end
+
 task.spawn(startMarkOnlineLoop)
 task.spawn(startProcess)
+task.spawn(timeoutChecker)
+task.spawn(monitorJobId)
