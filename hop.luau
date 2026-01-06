@@ -24,7 +24,7 @@ local hasHopped = false
 local hopMutex = false
 
 local API_URL = "http://163.245.200.159:1000"
-local SECRET = "TESTING-NDKJSF351OLM12MM15409ASFJ"
+local SECRET = "9fA3QwRZ7M2xKJdB8H6sE0TnYpC5LVaUeGmF4cW1rXkqSihO"
 local HEADERS = {
     ["Authorization"] = "Bearer " .. SECRET,
     ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
