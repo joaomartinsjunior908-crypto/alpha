@@ -23,6 +23,9 @@ end
 local hasHopped = false
 local hopInProgress = false
 local currentTeleportJob = nil
+local lastTeleportAttemptTime = 0
+local teleportAttemptCount = 0
+local isRejoinAttempt = false
 
 local API_URL = "http://163.245.200.159:1000"
 local SECRET = "9fA3QwRZ7M2xKJdB8H6sE0TnYpC5LVaUeGmF4cW1rXkqSihO"
@@ -164,6 +167,8 @@ local function tryTeleport(targetJobId)
     hopInProgress = true
     currentTeleportJob = targetJobId
     hasHopped = true  -- Optimistically set
+    lastTeleportAttemptTime = tick()
+    teleportAttemptCount = teleportAttemptCount + 1
     
     local success = pcall(tps.TeleportToPlaceInstance, tps, pid, targetJobId, lp)
     
@@ -176,6 +181,25 @@ local function tryTeleport(targetJobId)
     return true
 end
 
+-- Force rejoin to the same place (random server)
+local function forceRejoin()
+    isRejoinAttempt = true
+    lastTeleportAttemptTime = tick()
+    
+    local success = pcall(function()
+        tps:Teleport(pid, lp)
+    end)
+    
+    return success
+end
+
+-- Check if we're actively trying to teleport (within last 5 seconds)
+local function isActivelyTeleporting()
+    if not hopInProgress then return false end
+    local timeSinceLastAttempt = tick() - lastTeleportAttemptTime
+    return timeSinceLastAttempt < 5
+end
+
 -- MAIN SERVER HOP LOGIC
 -- 1. Get job from API
 -- 2. Try to teleport
@@ -183,7 +207,7 @@ end
 -- 4. Never retry same failed job
 local function serverHopWithRetry()
     local failedJobs = {}
-    local maxAttempts = 30  -- Max attempts before resetting
+    local maxAttempts = 50  -- Max attempts before resetting
     local attempts = 0
     
     while not hasHopped and attempts < maxAttempts do
@@ -534,18 +558,86 @@ local function startProcess()
 end
 
 local function timeoutChecker()
-    -- Wait 10 seconds
-    task.wait(10)
+    -- Phase 1: Wait 15 seconds, checking if we're actively trying to hop
+    local phase1Start = tick()
     
-    if not hasHopped and game.JobId == initialJobId then
-        warn("[Hop] 10 seconds passed, still trying...")
+    while tick() - phase1Start < 15 do
+        task.wait(1)
+        
+        -- Already hopped? We're done
+        if hasHopped or game.JobId ~= initialJobId then
+            return
+        end
     end
     
-    -- Wait another 10 seconds (20 total)
-    task.wait(10)
+    -- After 15 seconds, check status
+    if hasHopped or game.JobId ~= initialJobId then
+        return
+    end
     
+    -- Phase 2: Check if we're actively teleporting
+    if isActivelyTeleporting() then
+        warn("[Hop] 15s passed but teleport is in progress, waiting...")
+        
+        -- Give it more time if actively teleporting
+        local extendedWait = tick()
+        while tick() - extendedWait < 10 do
+            task.wait(1)
+            if hasHopped or game.JobId ~= initialJobId then
+                return
+            end
+            
+            -- Still actively trying? Keep waiting
+            if isActivelyTeleporting() then
+                extendedWait = tick() - 5  -- Reset timer partially
+            end
+        end
+    end
+    
+    -- Phase 3: Not actively teleporting or extended wait exceeded
+    -- Try to rejoin (random server in same place)
     if not hasHopped and game.JobId == initialJobId then
-        warn("[Hop] 20 seconds passed, forcing restart...")
+        warn("[Hop] Not actively teleporting, attempting rejoin...")
+        
+        local rejoinSuccess = forceRejoin()
+        
+        if rejoinSuccess then
+            -- Wait 5 seconds for rejoin to work
+            local rejoinStart = tick()
+            while tick() - rejoinStart < 5 do
+                task.wait(0.5)
+                if game.JobId ~= initialJobId then
+                    hasHopped = true
+                    return
+                end
+            end
+        end
+    end
+    
+    -- Phase 4: Rejoin didn't work after 5 seconds
+    -- Try one more time with a fresh job from API
+    if not hasHopped and game.JobId == initialJobId then
+        warn("[Hop] Rejoin failed, trying one last API hop...")
+        
+        local newJob = getNewJobFromAPI()
+        if newJob then
+            tryTeleport(newJob)
+            
+            -- Wait 5 more seconds
+            local lastChanceStart = tick()
+            while tick() - lastChanceStart < 5 do
+                task.wait(0.5)
+                if game.JobId ~= initialJobId then
+                    hasHopped = true
+                    return
+                end
+            end
+        end
+    end
+    
+    -- Phase 5: Everything failed, shutdown as last resort
+    if not hasHopped and game.JobId == initialJobId then
+        warn("[Hop] All attempts failed after 30+ seconds, shutting down...")
         pcall(function()
             game:Shutdown()
         end)
