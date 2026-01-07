@@ -294,7 +294,7 @@ local function getBrainrots()
             
             local genValue = getGen(entry.Index, entry.Mutation, entry.Traits)
             local genNum = parseGenValue(genValue)
-            if genNum < 1000000 then continue end
+            if genNum < 10000000 then continue end
             
             local channelData = channel:GetTable()
             local owner = "Unknown"
