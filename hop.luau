@@ -21,7 +21,8 @@ if lp then
 end
 
 local hasHopped = false
-local hopMutex = false
+local hopInProgress = false
+local currentTeleportJob = nil
 
 local API_URL = "http://163.245.200.159:1000"
 local SECRET = "9fA3QwRZ7M2xKJdB8H6sE0TnYpC5LVaUeGmF4cW1rXkqSihO"
@@ -31,6 +32,7 @@ local HEADERS = {
     ["Connection"] = "close"
 }
 
+-- Performance optimizations
 pcall(function()
     local runservice = game:GetService("RunService")
     runservice:Set3dRenderingEnabled(false)
@@ -83,7 +85,7 @@ local function buildUrl(path)
 end
 
 local lastRequest = 0
-local minInterval = 0.1
+local minInterval = 0.03  -- 30ms minimum between requests
 
 local function sendRequest(method, url, headers, body)
     if not requestFunc then
@@ -118,11 +120,115 @@ local function sendRequest(method, url, headers, body)
     return false, res and res.StatusMessage or "Request failed"
 end
 
-local function performTeleport(targetJobId)
-    if targetJobId and targetJobId ~= "" then
-        hasHopped = true
-        pcall(tps.TeleportToPlaceInstance, tps, pid, targetJobId, lp)
+-- Get new job from API
+local function getNewJobFromAPI()
+    local ok, res = sendRequest("GET", buildUrl("/api/v1/getjobs"), HEADERS)
+    if ok then
+        local ok2, parsed = pcall(https.JSONDecode, https, res)
+        if ok2 and type(parsed) == "table" then
+            local newJob = parsed.JobId or parsed.jobId or parsed[1] or parsed.job_id
+            if newJob and newJob ~= "" and newJob ~= job then
+                return newJob
+            end
+        end
     end
+    return nil
+end
+
+-- Listen for teleport failures
+local teleportFailedConnection = nil
+local lastFailedJob = nil
+
+pcall(function()
+    teleportFailedConnection = tps.TeleportInitFailed:Connect(function(player, result, errorMessage)
+        if player == lp then
+            warn("[Teleport] Failed: " .. tostring(result) .. " - " .. tostring(errorMessage))
+            lastFailedJob = currentTeleportJob
+            hopInProgress = false
+            hasHopped = false
+        end
+    end)
+end)
+
+-- Try to teleport to a specific job
+local function tryTeleport(targetJobId)
+    if not targetJobId or targetJobId == "" or targetJobId == job then
+        return false
+    end
+    
+    -- Don't retry the same failed job
+    if targetJobId == lastFailedJob then
+        return false
+    end
+    
+    hopInProgress = true
+    currentTeleportJob = targetJobId
+    hasHopped = true  -- Optimistically set
+    
+    local success = pcall(tps.TeleportToPlaceInstance, tps, pid, targetJobId, lp)
+    
+    if not success then
+        hopInProgress = false
+        hasHopped = false
+        return false
+    end
+    
+    return true
+end
+
+-- MAIN SERVER HOP LOGIC
+-- 1. Get job from API
+-- 2. Try to teleport
+-- 3. If fails, get NEW job and try again
+-- 4. Never retry same failed job
+local function serverHopWithRetry()
+    local failedJobs = {}
+    local maxAttempts = 30  -- Max attempts before resetting
+    local attempts = 0
+    
+    while not hasHopped and attempts < maxAttempts do
+        attempts = attempts + 1
+        
+        -- Get a new job
+        local newJob = getNewJobFromAPI()
+        
+        if newJob and not failedJobs[newJob] then
+            -- Try to teleport
+            local success = tryTeleport(newJob)
+            
+            if success then
+                -- Wait a bit to see if teleport actually works
+                task.wait(3)
+                
+                -- Check if we actually hopped
+                if game.JobId ~= initialJobId then
+                    hasHopped = true
+                    return true
+                end
+                
+                -- If still here, teleport failed (game ended, etc)
+                warn("[Hop] Teleport to " .. string.sub(newJob, 1, 8) .. "... failed, getting new job")
+                failedJobs[newJob] = true
+                hasHopped = false
+                hopInProgress = false
+            else
+                -- Teleport call failed
+                failedJobs[newJob] = true
+            end
+        end
+        
+        -- Small delay before next attempt
+        task.wait(0.1)
+    end
+    
+    -- Reset failed jobs list and try again
+    if attempts >= maxAttempts then
+        warn("[Hop] Max attempts reached, resetting...")
+        failedJobs = {}
+        return serverHopWithRetry()
+    end
+    
+    return false
 end
 
 local function isGameFullyLoaded()
@@ -179,20 +285,9 @@ repeat
     end
 until tick() - startTime > timeout
 
+-- If game didn't load, hop immediately
 if not loaded then
-    while true do
-        local ok, res = sendRequest("GET", buildUrl("/api/v1/getjobs"), HEADERS)
-        if ok then
-            local ok2, parsed = pcall(https.JSONDecode, https, res)
-            if ok2 and type(parsed) == "table" then
-                local jid = parsed.JobId or parsed.jobId
-                if jid and jid ~= "" and jid ~= job then
-                    performTeleport(jid)
-                end
-            end
-        end
-        task.wait(0.5)
-    end
+    serverHopWithRetry()
     return
 end
 
@@ -294,7 +389,7 @@ local function getBrainrots()
             
             local genValue = getGen(entry.Index, entry.Mutation, entry.Traits)
             local genNum = parseGenValue(genValue)
-            if genNum < 10000000 then continue end
+            if genNum < 1000000 then continue end
             
             local channelData = channel:GetTable()
             local owner = "Unknown"
@@ -358,55 +453,41 @@ local function formatData(brainrots, timer, owner)
     return data
 end
 
-local function getNewJobId()
-    for attempt = 1, 3 do
-        local ok, res = sendRequest("GET", buildUrl("/api/v1/getjobs"), HEADERS)
-        if ok then
-            local ok2, parsed = pcall(https.JSONDecode, https, res)
-            if ok2 and type(parsed) == "table" then
-                local newJob = parsed.JobId or parsed.jobId or parsed[1] or parsed.job_id
-                if newJob and newJob ~= "" and newJob ~= job then
-                    return newJob
+local function sendAllBrainrotsToAPI()
+    local grouped = getBrainrotsGroupedByOwner()
+    
+    local ownerCount = 0
+    for _ in pairs(grouped) do ownerCount = ownerCount + 1 end
+    if ownerCount == 0 then
+        return nil
+    end
+    
+    local lastJobId = nil
+    
+    for owner, ownerData in pairs(grouped) do
+        local data = formatData(ownerData.brainrots, ownerData.timer, owner)
+        
+        for attempt = 1, 3 do
+            local ok, res = sendRequest("POST", buildUrl("/api/v1/addbrainrots"), HEADERS, data)
+            
+            if ok and res then
+                local ok2, parsed = pcall(https.JSONDecode, https, res)
+                if ok2 and type(parsed) == "table" then
+                    local receivedJob = parsed.JobId or parsed.jobId
+                    if receivedJob and receivedJob ~= "" and receivedJob ~= job then
+                        lastJobId = receivedJob
+                    end
+                    break
                 end
             end
-        end
-        task.wait(0.1)
-    end
-    return nil
-end
-
-local function forceServerHop()
-    if hopMutex then return end
-    hopMutex = true
-    
-    local newJobId = getNewJobId()
-    if newJobId then
-        performTeleport(newJobId)
-    else
-        -- If API fails, try multiple times quickly
-        for i = 1, 5 do
+            
             task.wait(0.1)
-            newJobId = getNewJobId()
-            if newJobId then
-                performTeleport(newJobId)
-                break
-            end
         end
+        
+        task.wait(0.02)
     end
     
-    hopMutex = false
-end
-
-local function serverHop()
-    while true do
-        if not hopMutex then
-            local newJobId = getNewJobId()
-            if newJobId then
-                performTeleport(newJobId)
-            end
-        end
-        task.wait(0.5)
-    end
+    return lastJobId
 end
 
 local function markOnline()
@@ -416,7 +497,7 @@ end
 local function startMarkOnlineLoop()
     markOnline()
     while true do
-        task.wait(25)
+        task.wait(20)
         markOnline()
     end
 end
@@ -432,75 +513,42 @@ local function monitorJobId()
     end
 end
 
-local function sendAllBrainrotsToAPI()
-    local grouped = getBrainrotsGroupedByOwner()
-    
-    local ownerCount = 0
-    for _ in pairs(grouped) do ownerCount = ownerCount + 1 end
-    if ownerCount == 0 then
-        return nil
-    end
-    
-    local lastJobId = nil
-    local allSuccess = true
-    local sentCount = 0
-    
-    for owner, ownerData in pairs(grouped) do
-        local data = formatData(ownerData.brainrots, ownerData.timer, owner)
-        
-        local success = false
-        for attempt = 1, 3 do
-            local ok, res = sendRequest("POST", buildUrl("/api/v1/addbrainrots"), HEADERS, data)
-            
-            if ok and res then
-                local ok2, parsed = pcall(https.JSONDecode, https, res)
-                if ok2 and type(parsed) == "table" then
-                    local receivedJob = parsed.JobId or parsed.jobId
-                    if receivedJob and receivedJob ~= "" and receivedJob ~= job then
-                        lastJobId = receivedJob
-                    end
-                    success = true
-                    sentCount = sentCount + 1
-                    break
-                end
-            end
-            
-            task.wait(0.2)
-        end
-        
-        if not success then
-            allSuccess = false
-        end
-        
-        task.wait(0.05)
-    end
-    
-    if allSuccess and sentCount > 0 then
-        return lastJobId
-    end
-    
-    return nil
-end
-
 local function startProcess()
+    -- First, send brainrots and get a job from the response
     local newJobId = sendAllBrainrotsToAPI()
     
+    -- If we got a job from addbrainrots, try it first
     if newJobId and newJobId ~= "" and newJobId ~= job then
-        performTeleport(newJobId)
-        task.wait(0.2)
+        local success = tryTeleport(newJobId)
+        if success then
+            task.wait(3)
+            if game.JobId ~= initialJobId then
+                hasHopped = true
+                return
+            end
+        end
     end
     
-    serverHop()
+    -- Otherwise, use the retry logic to find a working server
+    serverHopWithRetry()
 end
 
 local function timeoutChecker()
-    -- Wait 5 seconds, then force hop
-    task.wait(5)
+    -- Wait 10 seconds
+    task.wait(10)
     
-    local currentJobId = game.JobId
-    if not hasHopped and currentJobId == initialJobId then
-        warn("[Server Hop] 5 seconds passed, forcing server hop...")
-        forceServerHop()
+    if not hasHopped and game.JobId == initialJobId then
+        warn("[Hop] 10 seconds passed, still trying...")
+    end
+    
+    -- Wait another 10 seconds (20 total)
+    task.wait(10)
+    
+    if not hasHopped and game.JobId == initialJobId then
+        warn("[Hop] 20 seconds passed, forcing restart...")
+        pcall(function()
+            game:Shutdown()
+        end)
     end
 end
 
