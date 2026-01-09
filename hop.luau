@@ -1,5 +1,3 @@
-setfpscap(25)
-
 local rs = game:GetService("ReplicatedStorage")
 local pl = game:GetService("Players")
 local ws = game:GetService("Workspace")
