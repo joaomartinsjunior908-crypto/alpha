@@ -88,7 +88,7 @@ local function buildUrl(path)
 end
 
 local lastRequest = 0
-local minInterval = 0.03  -- 30ms minimum between requests
+local minInterval = 0
 
 local function sendRequest(method, url, headers, body)
     if not requestFunc then
@@ -141,14 +141,25 @@ end
 -- Listen for teleport failures
 local teleportFailedConnection = nil
 local lastFailedJob = nil
+local lastIsTeleportingErrorTime = 0
+local minWaitAfterIsTeleporting = 1  -- Wait 2 seconds after IsTeleporting error
 
 pcall(function()
     teleportFailedConnection = tps.TeleportInitFailed:Connect(function(player, result, errorMessage)
         if player == lp then
-            warn("[Teleport] Failed: " .. tostring(result) .. " - " .. tostring(errorMessage))
+            local resultStr = tostring(result)
+            warn("[Teleport] Failed: " .. resultStr .. " - " .. tostring(errorMessage))
+            
+            -- If it's IsTeleporting error, track the time and wait before next attempt
+            if resultStr:find("IsTeleporting") or tostring(errorMessage):find("previous teleport") or tostring(errorMessage):find("in processing") then
+                lastIsTeleportingErrorTime = tick()
+                warn("[Hop] IsTeleporting error detected, will wait before next attempt")
+            end
+            
             lastFailedJob = currentTeleportJob
             hopInProgress = false
             hasHopped = false
+            currentTeleportJob = nil
         end
     end)
 end)
@@ -159,9 +170,30 @@ local function tryTeleport(targetJobId)
         return false
     end
     
-    -- Don't retry the same failed job
-    if targetJobId == lastFailedJob then
+    -- Don't retry the same failed job immediately (unless it's been a while)
+    -- For IsTeleporting errors, we might want to retry after a delay
+    local timeSinceLastFailure = tick() - lastIsTeleportingErrorTime
+    if targetJobId == lastFailedJob and timeSinceLastFailure < minWaitAfterIsTeleporting then
         return false
+    end
+    
+    -- Check if we need to wait after an IsTeleporting error
+    local timeSinceIsTeleportingError = tick() - lastIsTeleportingErrorTime
+    if timeSinceIsTeleportingError < minWaitAfterIsTeleporting and timeSinceIsTeleportingError > 0 then
+        local waitTime = minWaitAfterIsTeleporting - timeSinceIsTeleportingError
+        warn("[Hop] Waiting " .. string.format("%.2f", waitTime) .. "s after IsTeleporting error before retrying...")
+        task.wait(waitTime)
+    end
+    
+    -- Don't attempt if we're already in progress and it's been less than 3 seconds
+    if hopInProgress then
+        local timeSinceLastAttempt = tick() - lastTeleportAttemptTime
+        if timeSinceLastAttempt < 3 then
+            return false
+        else
+            -- Timeout, reset the flag
+            hopInProgress = false
+        end
     end
     
     hopInProgress = true
@@ -175,6 +207,7 @@ local function tryTeleport(targetJobId)
     if not success then
         hopInProgress = false
         hasHopped = false
+        currentTeleportJob = nil
         return false
     end
     
@@ -204,55 +237,128 @@ end
 -- 1. Get job from API
 -- 2. Try to teleport
 -- 3. If fails, get NEW job and try again
--- 4. Never retry same failed job
+-- 4. Never retry same failed job (unless enough time passed)
 local function serverHopWithRetry()
     local failedJobs = {}
-    local maxAttempts = 50  -- Max attempts before resetting
+    local failedJobTimestamps = {}
+    local maxAttempts = 100  -- Increased max attempts
     local attempts = 0
+    local consecutiveFailures = 0
+    local maxConsecutiveFailures = 5
     
     while not hasHopped and attempts < maxAttempts do
         attempts = attempts + 1
         
+        -- Check if we actually hopped (in case it happened asynchronously)
+        if game.JobId ~= initialJobId then
+            hasHopped = true
+            return true
+        end
+        
+        -- If we had IsTeleporting error recently, wait longer
+        local timeSinceIsTeleportingError = tick() - lastIsTeleportingErrorTime
+        if timeSinceIsTeleportingError < minWaitAfterIsTeleporting and timeSinceIsTeleportingError > 0 then
+            local waitTime = minWaitAfterIsTeleporting - timeSinceIsTeleportingError + 0.5
+            task.wait(waitTime)
+        end
+        
         -- Get a new job
         local newJob = getNewJobFromAPI()
         
-        if newJob and not failedJobs[newJob] then
+        -- Check if job was previously failed, but allow retry after 10 seconds
+        local canRetry = true
+        if failedJobs[newJob] then
+            local timeSinceFailure = tick() - (failedJobTimestamps[newJob] or 0)
+            if timeSinceFailure < 10 then
+                canRetry = false
+            else
+                -- Reset after timeout
+                failedJobs[newJob] = nil
+                failedJobTimestamps[newJob] = nil
+            end
+        end
+        
+        if newJob and canRetry and newJob ~= job then
             -- Try to teleport
             local success = tryTeleport(newJob)
             
             if success then
                 -- Wait a bit to see if teleport actually works
-                task.wait(3)
+                local waitStart = tick()
+                local waitDuration = 3
                 
-                -- Check if we actually hopped
+                while tick() - waitStart < waitDuration do
+                    task.wait(0.5)
+                    
+                    -- Check if we actually hopped
+                    if game.JobId ~= initialJobId then
+                        hasHopped = true
+                        return true
+                    end
+                    
+                    -- Check if teleport failed while waiting
+                    if not hopInProgress and not hasHopped then
+                        -- Teleport failed event fired, break early
+                        break
+                    end
+                end
+                
+                -- Check one more time if we hopped
                 if game.JobId ~= initialJobId then
                     hasHopped = true
                     return true
                 end
                 
-                -- If still here, teleport failed (game ended, etc)
+                -- If still here, teleport failed (game ended, IsTeleporting, etc)
                 warn("[Hop] Teleport to " .. string.sub(newJob, 1, 8) .. "... failed, getting new job")
                 failedJobs[newJob] = true
+                failedJobTimestamps[newJob] = tick()
                 hasHopped = false
                 hopInProgress = false
+                consecutiveFailures = consecutiveFailures + 1
+                
+                -- If too many consecutive failures, wait a bit longer
+                if consecutiveFailures >= maxConsecutiveFailures then
+                    warn("[Hop] Too many consecutive failures, waiting 2s before retrying...")
+                    task.wait(2)
+                    consecutiveFailures = 0
+                end
             else
-                -- Teleport call failed
-                failedJobs[newJob] = true
+                -- Teleport call failed immediately
+                if newJob then
+                    failedJobs[newJob] = true
+                    failedJobTimestamps[newJob] = tick()
+                end
+                consecutiveFailures = consecutiveFailures + 1
             end
+        elseif not newJob then
+            -- API returned no job, wait a bit
+            task.wait(0.5)
         end
         
-        -- Small delay before next attempt
-        task.wait(0.1)
+        -- Small delay before next attempt (longer if we had IsTeleporting errors)
+        if timeSinceIsTeleportingError < 5 and timeSinceIsTeleportingError > 0 then
+            task.wait(0.5)
+        else
+            task.wait(0.1)
+        end
     end
     
-    -- Reset failed jobs list and try again
-    if attempts >= maxAttempts then
-        warn("[Hop] Max attempts reached, resetting...")
+    -- If we've tried many times but still haven't hopped, reset and try again
+    if attempts >= maxAttempts and not hasHopped and game.JobId == initialJobId then
+        warn("[Hop] Max attempts reached (" .. maxAttempts .. "), resetting failed jobs and retrying...")
         failedJobs = {}
+        failedJobTimestamps = {}
+        consecutiveFailures = 0
+        lastFailedJob = nil
+        lastIsTeleportingErrorTime = 0
+        
+        -- Wait a bit before retrying
+        task.wait(2)
         return serverHopWithRetry()
     end
     
-    return false
+    return hasHopped
 end
 
 local function isGameFullyLoaded()
@@ -391,6 +497,31 @@ local function parseGenValue(genStr)
     return tonumber(clean) or 0
 end
 
+-- Quick check if there's any brainrot with 10M+ (fast, returns immediately on first match)
+local function hasAnyBrainrot10MPlus()
+    if not plots then return false end
+    
+    for _, plot in plots:GetChildren() do
+        if not plot:IsA("Model") or not plot:GetAttribute("Tier") then continue end
+        
+        local channel = getChannel(plot.Name)  -- Use getChannel instead of waitChannel for speed
+        if not channel then continue end
+        
+        local animals = channel:Get("AnimalList") or {}
+        
+        for _, entry in ipairs(animals) do
+            if type(entry) ~= "table" or not entry.Index or entry == "Empty" then continue end
+            
+            local genValue = getGen(entry.Index, entry.Mutation, entry.Traits)
+            local genNum = parseGenValue(genValue)
+            if genNum >= 10000000 then
+                return true  -- Found one, return immediately
+            end
+        end
+    end
+    return false
+end
+
 local function getBrainrots()
     local results = {}
     if not plots then return results end
@@ -408,12 +539,10 @@ local function getBrainrots()
             if type(entry) ~= "table" or not entry.Index or entry == "Empty" then continue end
             
             local animalData = brainrotsData[entry.Index]
-            local rarity = animalData and animalData.Rarity or "N/A"
-            if rarity ~= "Secret" then continue end
             
             local genValue = getGen(entry.Index, entry.Mutation, entry.Traits)
             local genNum = parseGenValue(genValue)
-            if genNum < 1000000 then continue end
+            if genNum < 10000000 then continue end
             
             local channelData = channel:GetTable()
             local owner = "Unknown"
@@ -538,22 +667,54 @@ local function monitorJobId()
 end
 
 local function startProcess()
-    -- First, send brainrots and get a job from the response
+    -- Quick check: if no brainrots with 10M+, hop immediately
+    local hasBrainrots = hasAnyBrainrot10MPlus()
+    
+    if not hasBrainrots then
+        -- No brainrots found, hop immediately without API calls
+        warn("[Hop] No brainrots with 10M+ found, hopping immediately...")
+        serverHopWithRetry()
+        return
+    end
+    
+    -- Has brainrots, send to API and then hop
+    warn("[Hop] Brainrots with 10M+ found, sending to API...")
     local newJobId = sendAllBrainrotsToAPI()
     
     -- If we got a job from addbrainrots, try it first
     if newJobId and newJobId ~= "" and newJobId ~= job then
         local success = tryTeleport(newJobId)
         if success then
-            task.wait(3)
+            -- Wait and check if teleport worked
+            local waitStart = tick()
+            while tick() - waitStart < 3 do
+                task.wait(0.5)
+                if game.JobId ~= initialJobId then
+                    hasHopped = true
+                    return
+                end
+                -- If teleport failed event fired, break early
+                if not hopInProgress and not hasHopped then
+                    break
+                end
+            end
+            
+            -- Final check
             if game.JobId ~= initialJobId then
                 hasHopped = true
                 return
             end
+            
+            -- Teleport from addbrainrots failed, mark as failed
+            warn("[Hop] Initial teleport from addbrainrots failed, starting retry logic...")
+            lastFailedJob = newJobId
+            hopInProgress = false
+            hasHopped = false
         end
     end
     
-    -- Otherwise, use the retry logic to find a working server
+    -- Use the retry logic to find a working server
+    -- This will keep retrying until it succeeds or max attempts
     serverHopWithRetry()
 end
 
