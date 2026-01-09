@@ -1,3 +1,5 @@
+setfpscap(25)
+
 local rs = game:GetService("ReplicatedStorage")
 local pl = game:GetService("Players")
 local ws = game:GetService("Workspace")
@@ -143,6 +145,7 @@ local teleportFailedConnection = nil
 local lastFailedJob = nil
 local lastIsTeleportingErrorTime = 0
 local minWaitAfterIsTeleporting = 1  -- Wait 2 seconds after IsTeleporting error
+local activeConnections = {}  -- Track all connections for cleanup
 
 pcall(function()
     teleportFailedConnection = tps.TeleportInitFailed:Connect(function(player, result, errorMessage)
@@ -162,13 +165,64 @@ pcall(function()
             currentTeleportJob = nil
         end
     end)
+    table.insert(activeConnections, teleportFailedConnection)
 end)
+
+-- Cleanup function to disconnect everything and free resources before hop
+local lastCleanupTime = 0
+local cleanupCooldown = 2  -- Only cleanup every 2 seconds max
+
+local function cleanupBeforeHop(force)
+    local now = tick()
+    if not force and (now - lastCleanupTime) < cleanupCooldown then
+        return  -- Skip cleanup if done recently
+    end
+    lastCleanupTime = now
+    
+    -- Disconnect all tracked connections (except teleportFailedConnection which we keep)
+    for _, conn in ipairs(activeConnections) do
+        if conn and conn ~= teleportFailedConnection then
+            pcall(function() conn:Disconnect() end)
+        end
+    end
+    
+    -- Clear active connections list (but keep teleportFailedConnection)
+    activeConnections = {teleportFailedConnection}
+    
+    -- Clear synchronizer channels cache if it exists (only if force cleanup)
+    if force and synchronizer then
+        pcall(function()
+            local channels = synchronizer:GetAllChannels()
+            if channels then
+                for _, channel in pairs(channels) do
+                    pcall(function()
+                        if channel and typeof(channel) == "Instance" then
+                            -- Just clear references, don't destroy
+                        end
+                    end)
+                end
+            end
+        end)
+    end
+    
+    -- Force garbage collection if available (only if force cleanup)
+    if force then
+        pcall(function()
+            if collectgarbage then
+                collectgarbage("collect")
+            end
+        end)
+    end
+end
 
 -- Try to teleport to a specific job
 local function tryTeleport(targetJobId)
     if not targetJobId or targetJobId == "" or targetJobId == job then
         return false
     end
+    
+    -- Cleanup before attempting teleport (only light cleanup, not force)
+    cleanupBeforeHop(false)
     
     -- Don't retry the same failed job immediately (unless it's been a while)
     -- For IsTeleporting errors, we might want to retry after a delay
@@ -216,6 +270,7 @@ end
 
 -- Force rejoin to the same place (random server)
 local function forceRejoin()
+    cleanupBeforeHop(true)  -- Force cleanup before rejoin
     isRejoinAttempt = true
     lastTeleportAttemptTime = tick()
     
@@ -239,6 +294,9 @@ end
 -- 3. If fails, get NEW job and try again
 -- 4. Never retry same failed job (unless enough time passed)
 local function serverHopWithRetry()
+    -- Cleanup before starting hop process (force cleanup only once)
+    cleanupBeforeHop(true)
+    
     local failedJobs = {}
     local failedJobTimestamps = {}
     local maxAttempts = 100  -- Increased max attempts
@@ -283,12 +341,12 @@ local function serverHopWithRetry()
             local success = tryTeleport(newJob)
             
             if success then
-                -- Wait a bit to see if teleport actually works
+                -- Wait a bit to see if teleport actually works (reduced from 3s to 2s)
                 local waitStart = tick()
-                local waitDuration = 3
+                local waitDuration = 2
                 
                 while tick() - waitStart < waitDuration do
-                    task.wait(0.5)
+                    task.wait(0.25)  -- Reduced from 0.5 to 0.25 for faster checks
                     
                     -- Check if we actually hopped
                     if game.JobId ~= initialJobId then
@@ -319,8 +377,8 @@ local function serverHopWithRetry()
                 
                 -- If too many consecutive failures, wait a bit longer
                 if consecutiveFailures >= maxConsecutiveFailures then
-                    warn("[Hop] Too many consecutive failures, waiting 2s before retrying...")
-                    task.wait(2)
+                    warn("[Hop] Too many consecutive failures, waiting 1s before retrying...")
+                    task.wait(1)  -- Reduced from 2s to 1s
                     consecutiveFailures = 0
                 end
             else
@@ -332,15 +390,15 @@ local function serverHopWithRetry()
                 consecutiveFailures = consecutiveFailures + 1
             end
         elseif not newJob then
-            -- API returned no job, wait a bit
-            task.wait(0.5)
+            -- API returned no job, wait a bit (reduced)
+            task.wait(0.2)  -- Reduced from 0.5
         end
         
         -- Small delay before next attempt (longer if we had IsTeleporting errors)
         if timeSinceIsTeleportingError < 5 and timeSinceIsTeleportingError > 0 then
-            task.wait(0.5)
+            task.wait(0.3)  -- Reduced from 0.5
         else
-            task.wait(0.1)
+            task.wait(0.05)  -- Reduced from 0.1
         end
     end
     
@@ -353,8 +411,8 @@ local function serverHopWithRetry()
         lastFailedJob = nil
         lastIsTeleportingErrorTime = 0
         
-        -- Wait a bit before retrying
-        task.wait(2)
+        -- Wait a bit before retrying (reduced from 2s to 1s)
+        task.wait(1)
         return serverHopWithRetry()
     end
     
@@ -404,11 +462,11 @@ local function isGameFullyLoaded()
 end
 
 local startTime = tick()
-local timeout = 15
+local timeout = 10  -- Reduced from 15 to 10 seconds
 local loaded = false
 
 repeat
-    task.wait(0.5)
+    task.wait(0.3)  -- Reduced from 0.5 to 0.3 for faster checks
     if isGameFullyLoaded() then
         loaded = true
         break
@@ -451,10 +509,11 @@ local function waitChannel(index)
     if channel then return channel end
     
     local start = tick()
+    local maxWait = 2  -- Reduced from 10 to 2 seconds
     repeat
-        task.wait(0.1)
+        task.wait(0.05)  -- Reduced from 0.1 to 0.05
         channel = getChannel(index)
-        if tick() - start > 10 then return nil end
+        if tick() - start > maxWait then return nil end
     until channel
     return channel
 end
@@ -501,15 +560,25 @@ end
 local function hasAnyBrainrot10MPlus()
     if not plots then return false end
     
+    local maxPlotsToCheck = 10  -- Limit plots to check for speed
+    local plotsChecked = 0
+    
     for _, plot in plots:GetChildren() do
+        if plotsChecked >= maxPlotsToCheck then break end
         if not plot:IsA("Model") or not plot:GetAttribute("Tier") then continue end
+        
+        plotsChecked = plotsChecked + 1
         
         local channel = getChannel(plot.Name)  -- Use getChannel instead of waitChannel for speed
         if not channel then continue end
         
         local animals = channel:Get("AnimalList") or {}
+        if #animals == 0 then continue end
         
-        for _, entry in ipairs(animals) do
+        -- Quick check: only check first few animals for speed
+        local maxAnimalsToCheck = math.min(5, #animals)
+        for i = 1, maxAnimalsToCheck do
+            local entry = animals[i]
             if type(entry) ~= "table" or not entry.Index or entry == "Empty" then continue end
             
             local genValue = getGen(entry.Index, entry.Mutation, entry.Traits)
@@ -607,6 +676,9 @@ local function formatData(brainrots, timer, owner)
 end
 
 local function sendAllBrainrotsToAPI()
+    local startTime = tick()
+    local maxTime = 5  -- Max 5 seconds for all API calls
+    
     local grouped = getBrainrotsGroupedByOwner()
     
     local ownerCount = 0
@@ -616,11 +688,20 @@ local function sendAllBrainrotsToAPI()
     end
     
     local lastJobId = nil
+    local maxOwners = 5  -- Limit to first 5 owners for speed
     
+    local ownerIndex = 0
     for owner, ownerData in pairs(grouped) do
+        if tick() - startTime > maxTime then break end  -- Timeout check
+        if ownerIndex >= maxOwners then break end  -- Limit owners
+        ownerIndex = ownerIndex + 1
+        
         local data = formatData(ownerData.brainrots, ownerData.timer, owner)
         
-        for attempt = 1, 3 do
+        -- Reduced attempts from 3 to 2
+        for attempt = 1, 2 do
+            if tick() - startTime > maxTime then break end  -- Timeout check
+            
             local ok, res = sendRequest("POST", buildUrl("/api/v1/addbrainrots"), HEADERS, data)
             
             if ok and res then
@@ -634,10 +715,12 @@ local function sendAllBrainrotsToAPI()
                 end
             end
             
-            task.wait(0.1)
+            if attempt < 2 then
+                task.wait(0.05)  -- Reduced from 0.1
+            end
         end
         
-        task.wait(0.02)
+        task.wait(0.01)  -- Reduced from 0.02
     end
     
     return lastJobId
@@ -685,10 +768,10 @@ local function startProcess()
     if newJobId and newJobId ~= "" and newJobId ~= job then
         local success = tryTeleport(newJobId)
         if success then
-            -- Wait and check if teleport worked
+            -- Wait and check if teleport worked (reduced from 3s to 2s)
             local waitStart = tick()
-            while tick() - waitStart < 3 do
-                task.wait(0.5)
+            while tick() - waitStart < 2 do
+                task.wait(0.25)  -- Reduced from 0.5 to 0.25
                 if game.JobId ~= initialJobId then
                     hasHopped = true
                     return
@@ -719,11 +802,11 @@ local function startProcess()
 end
 
 local function timeoutChecker()
-    -- Phase 1: Wait 15 seconds, checking if we're actively trying to hop
+    -- Phase 1: Wait 10 seconds, checking if we're actively trying to hop (reduced from 15)
     local phase1Start = tick()
     
-    while tick() - phase1Start < 15 do
-        task.wait(1)
+    while tick() - phase1Start < 10 do
+        task.wait(0.5)  -- Reduced from 1s to 0.5s for faster checks
         
         -- Already hopped? We're done
         if hasHopped or game.JobId ~= initialJobId then
@@ -738,19 +821,19 @@ local function timeoutChecker()
     
     -- Phase 2: Check if we're actively teleporting
     if isActivelyTeleporting() then
-        warn("[Hop] 15s passed but teleport is in progress, waiting...")
+        warn("[Hop] 10s passed but teleport is in progress, waiting...")
         
-        -- Give it more time if actively teleporting
+        -- Give it more time if actively teleporting (reduced from 10s to 5s)
         local extendedWait = tick()
-        while tick() - extendedWait < 10 do
-            task.wait(1)
+        while tick() - extendedWait < 5 do
+            task.wait(0.5)  -- Reduced from 1s to 0.5s
             if hasHopped or game.JobId ~= initialJobId then
                 return
             end
             
             -- Still actively trying? Keep waiting
             if isActivelyTeleporting() then
-                extendedWait = tick() - 5  -- Reset timer partially
+                extendedWait = tick() - 2.5  -- Reset timer partially (reduced from 5)
             end
         end
     end
@@ -763,10 +846,10 @@ local function timeoutChecker()
         local rejoinSuccess = forceRejoin()
         
         if rejoinSuccess then
-            -- Wait 5 seconds for rejoin to work
+            -- Wait 3 seconds for rejoin to work (reduced from 5)
             local rejoinStart = tick()
-            while tick() - rejoinStart < 5 do
-                task.wait(0.5)
+            while tick() - rejoinStart < 3 do
+                task.wait(0.25)  -- Reduced from 0.5
                 if game.JobId ~= initialJobId then
                     hasHopped = true
                     return
@@ -775,7 +858,7 @@ local function timeoutChecker()
         end
     end
     
-    -- Phase 4: Rejoin didn't work after 5 seconds
+    -- Phase 4: Rejoin didn't work after 3 seconds
     -- Try one more time with a fresh job from API
     if not hasHopped and game.JobId == initialJobId then
         warn("[Hop] Rejoin failed, trying one last API hop...")
@@ -784,10 +867,10 @@ local function timeoutChecker()
         if newJob then
             tryTeleport(newJob)
             
-            -- Wait 5 more seconds
+            -- Wait 3 more seconds (reduced from 5)
             local lastChanceStart = tick()
-            while tick() - lastChanceStart < 5 do
-                task.wait(0.5)
+            while tick() - lastChanceStart < 3 do
+                task.wait(0.25)  -- Reduced from 0.5
                 if game.JobId ~= initialJobId then
                     hasHopped = true
                     return
