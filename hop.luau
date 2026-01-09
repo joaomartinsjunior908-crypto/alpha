@@ -37,38 +37,8 @@ local HEADERS = {
     ["Connection"] = "close"
 }
 
--- Performance optimizations
-pcall(function()
-    local runservice = game:GetService("RunService")
-    runservice:Set3dRenderingEnabled(false)
-    
-    local renderSettings = settings().Rendering
-    renderSettings.QualityLevel = Enum.QualityLevel.Level01
-    renderSettings.MeshPartDetailLevel = Enum.MeshPartDetailLevel.Level01
-    renderSettings.EditQualityLevel = Enum.QualityLevel.Level01
-    
-    lighting.GlobalShadows = false
-    lighting.Brightness = 3
-    lighting.FogEnd = 9e9
-    lighting.Technology = Enum.Technology.Legacy
-    lighting.EnvironmentDiffuseScale = 0
-    lighting.EnvironmentSpecularScale = 0
-    
-    for _, effect in ipairs(lighting:GetChildren()) do
-        if effect:IsA("PostEffect") then
-            pcall(function() 
-                effect.Enabled = false 
-                effect:Destroy() 
-            end)
-        end
-    end
-    
-    if setfflag then
-        pcall(function() setfflag("DFIntDebugFRMQualityLevelOverride", "1") end)
-        pcall(function() setfflag("FFlagDisablePostFx", "True") end)
-        pcall(function() setfflag("FIntRenderShadowIntensity", "0") end)
-    end
-end)
+local runservice = game:GetService("RunService")
+runservice:Set3dRenderingEnabled(false)
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
