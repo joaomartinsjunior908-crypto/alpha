@@ -361,7 +361,7 @@ else
         local monitoringDuration = 20
         
         while tick() - monitoringStart < monitoringDuration do
-            task.wait(2) -- Espera 2 segundos
+            task.wait(0.5) -- Espera 2 segundos
             
             -- Verifica se já mudou de servidor
             if game.JobId ~= initialJobId then
