@@ -812,20 +812,15 @@ local function timeoutChecker()
     -- Try to rejoin (random server in same place)
     if not hasHopped and game.JobId == initialJobId then
         warn("[Hop] Not actively teleporting, attempting rejoin...")
-        
-        local rejoinSuccess = forceRejoin()
-        
-        if rejoinSuccess then
-            -- Wait 3 seconds for rejoin to work (reduced from 5)
-            local rejoinStart = tick()
-            while tick() - rejoinStart < 3 do
-                task.wait(0.25)  -- Reduced from 0.5
-                if game.JobId ~= initialJobId then
-                    hasHopped = true
-                    return
+        task.spawn(function()
+            while true do
+                task.wait(1)
+                local newJob = getNewJobFromAPI()
+                if newJob then
+                    tryTeleport(newJob)
                 end
             end
-        end
+        end)
     end
     
     -- Phase 4: Rejoin didn't work after 3 seconds
