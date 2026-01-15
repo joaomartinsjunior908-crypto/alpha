@@ -29,8 +29,8 @@ local lastTeleportAttemptTime = 0
 local teleportAttemptCount = 0
 local isRejoinAttempt = false
 
-local API_URL = ""
-local SECRET = ""
+local API_URL = "http://163.245.200.159:1000"
+local SECRET = "9fA3QwRZ7M2xKJdB8H6sE0TnYpC5LVaUeGmF4cW1rXkqSihO"
 local HEADERS = {
     ["Authorization"] = "Bearer " .. SECRET,
     ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
