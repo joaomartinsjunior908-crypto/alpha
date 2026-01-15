@@ -853,7 +853,13 @@ local function timeoutChecker()
     if not hasHopped and game.JobId == initialJobId then
         warn("[Hop] All attempts failed after 30+ seconds, shutting down...")
         pcall(function()
-            game:Shutdown()
+            while true do
+                task.wait(1)
+                local newJob = getNewJobFromAPI()
+                if newJob then
+                    tryTeleport(newJob)
+                end
+            end
         end)
     end
 end
