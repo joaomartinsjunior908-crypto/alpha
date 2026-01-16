@@ -358,7 +358,7 @@ else
         
         local lastBrainrots = {}
         local monitoringStart = tick()
-        local monitoringDuration = 20
+        local monitoringDuration = 15
         
         while tick() - monitoringStart < monitoringDuration do
             task.wait(0.5) -- Espera 2 segundos
