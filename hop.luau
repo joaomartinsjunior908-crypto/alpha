@@ -27,6 +27,63 @@ local HEADERS = {
     ["Connection"] = "close"
 }
 
+local GOOD_BRAINROTS = {
+    "Strawberry Elephant",
+    "Meowl",
+    "Skibidi Toilet",
+    "Dragon Cannelloni",
+    "Dragon Gingerini",
+    "Capitano Moby",
+    "Headless Horseman",
+    "Burguro and Fryuro",
+    "Cooki and Milki",
+    "Fragma and Chocrama",
+    "La Supreme Combinasion",
+    "Reinito Sleighito",
+    "La Casa Boo",
+    "Spooky and Pumpky",
+    "Garama and Madundung",
+    "Cerberus",
+    "Gingerat Gerat",
+    "Ginger Gerat",
+    "La Secret Combinasion",
+    "Lavadorito Spinito",
+    "Ketchuru and Musturu",
+    "Los Hotspotsitos",
+    "Tacorita Bicicleta",
+    "Nuclearo Dinossauro",
+    "Money Money Puggy",
+    "Tang Tang Keletang",
+    "Ketupat Kepat",
+    "Tictac Sahur",
+    "Chipso and Queso",
+    "Chillin Chili",
+    "Tuff Toucan",
+    "Money Money Reindeer",
+    "Fishino Clownino",
+    "Celularcini Viciosini",
+    "La Ginger Sekolah",
+    "Tralaledon",
+    "Esok Sekolah",
+    "Spaghetti Tualetti",
+    "W or L",
+    "Los Primos",
+    "Eviledon",
+    "Los Puggies",
+    "Los Tacoritas",
+    "La Taco Combinasion",
+    "Orcaledon",
+    "Swaggy Bros",
+    "Jolly Jolly Sahur",
+    "Festive 67",
+    "Los Spaghettis",
+}
+
+local GOOD_BRAINROTS_MAP = {}
+for _, name in ipairs(GOOD_BRAINROTS) do
+    GOOD_BRAINROTS_MAP[name] = true
+end
+
 local runservice = game:GetService("RunService")
 runservice:Set3dRenderingEnabled(false)
 
@@ -76,12 +133,10 @@ local function sendRequest(method, url, headers, body)
     return false, res and res.StatusMessage or "Request failed"
 end
 
--- Notifica (marca online)
 local function markOnline()
     sendRequest("POST", buildUrl("/api/v1/markonline"), HEADERS, { Username = name })
 end
 
--- Get new job from API
 local function getNewJobFromAPI()
     local ok, res = sendRequest("GET", buildUrl("/api/v1/getjobs"), HEADERS)
     if ok then
@@ -96,7 +151,6 @@ local function getNewJobFromAPI()
     return nil
 end
 
--- Tenta teleportar para um job
 local function tryTeleport(targetJobId)
     if not targetJobId or targetJobId == "" or targetJobId == job then
         return false
@@ -106,7 +160,29 @@ local function tryTeleport(targetJobId)
     return success
 end
 
--- Verifica se o jogo carregou completamente
+local function startHopLoop()
+    while true do
+        if game.JobId ~= initialJobId then
+            break
+        end
+        
+        local newJob = getNewJobFromAPI()
+        
+        if newJob then
+            local success = tryTeleport(newJob)
+            
+            if success then
+                task.wait(1)
+                if game.JobId ~= initialJobId then
+                    break
+                end
+            end
+        end
+        
+        task.wait(1)
+    end
+end
+
 local function isGameFullyLoaded()
     local clientLoaded = replicatedFirst:GetAttribute("ClientLoaded")
     local dataLoaded = replicatedFirst:GetAttribute("DataLoaded")
@@ -148,7 +224,6 @@ local function isGameFullyLoaded()
     return success and result == true
 end
 
--- Espera o jogo carregar
 local startTime = tick()
 local timeout = 10
 local loaded = false
@@ -162,10 +237,8 @@ repeat
 until tick() - startTime > timeout
 
 if not loaded then
-    warn("[Hop] Game didn't load, starting hop immediately...")
-    -- Se não carregou, vai direto para o hop
+    task.spawn(startHopLoop)
 else
-    -- Carrega os módulos necessários
     local packages = rs:WaitForChild("Packages")
     local utils = rs:WaitForChild("Utils")
     local sharedF = rs:WaitForChild("Shared")
@@ -177,7 +250,6 @@ else
     local _, synchronizer = pcall(function() return require(packages.Synchronizer) end)
     
     if not numbersU or not brainrotsShared or not brainrotsData or not synchronizer then
-        warn("[Hop] Failed to load required modules, starting hop...")
         loaded = false
     end
     
@@ -242,7 +314,6 @@ else
             return tonumber(clean) or 0
         end
         
-        -- Pega todos os brainrots (pets)
         local function getAllBrainrots()
             local results = {}
             if not plots then return results end
@@ -283,18 +354,15 @@ else
             return results
         end
         
-        -- Compara duas listas de brainrots e retorna os novos
         local function getNewBrainrots(oldList, newList)
             local newOnes = {}
             local oldMap = {}
             
-            -- Cria mapa dos antigos (index + mutation como chave)
             for _, br in ipairs(oldList) do
                 local key = (br.index or "") .. "|" .. (br.mutation or "")
                 oldMap[key] = true
             end
             
-            -- Verifica quais são novos
             for _, br in ipairs(newList) do
                 local key = (br.index or "") .. "|" .. (br.mutation or "")
                 if not oldMap[key] then
@@ -305,7 +373,6 @@ else
             return newOnes
         end
         
-        -- Formata dados para notificar
         local function formatData(brainrots, timer, owner)
             local data = {
                 Timer = timer,
@@ -328,11 +395,19 @@ else
             return data
         end
         
-        -- Notifica novos brainrots
+        local function hasGoodBrainrot(brainrots)
+            for _, br in ipairs(brainrots) do
+                local brainrotName = br.name or ""
+                if GOOD_BRAINROTS_MAP[brainrotName] then
+                    return true, brainrotName
+                end
+            end
+            return false, nil
+        end
+        
         local function notifyNewBrainrots(newBrainrots)
             if #newBrainrots == 0 then return end
             
-            -- Agrupa por owner
             local byOwner = {}
             for _, br in ipairs(newBrainrots) do
                 local owner = br.owner
@@ -345,77 +420,42 @@ else
                 table.insert(byOwner[owner].brainrots, br)
             end
             
-            -- Envia para API
             for owner, ownerData in pairs(byOwner) do
                 local data = formatData(ownerData.brainrots, ownerData.timer, owner)
                 sendRequest("POST", buildUrl("/api/v1/addbrainrots"), HEADERS, data)
             end
         end
         
-        -- FASE 1: Verifica pets a cada 2s por 30 segundos
-        warn("[Hop] Iniciando verificação de pets por 30 segundos...")
-        markOnline() -- Notifica ao entrar
+        markOnline()
         
         local lastBrainrots = {}
         local monitoringStart = tick()
-        local monitoringDuration = 25
+        local monitoringDuration = 30
+        local foundGoodBrainrot = false
         
-        while tick() - monitoringStart < monitoringDuration do
-            task.wait(0.5) -- Espera 2 segundos
+        while tick() - monitoringStart < monitoringDuration and not foundGoodBrainrot do
+            task.wait(0.5)
             
-            -- Verifica se já mudou de servidor
             if game.JobId ~= initialJobId then
-                warn("[Hop] Já está em outro servidor!")
                 return
             end
             
-            -- Pega todos os brainrots
             local currentBrainrots = getAllBrainrots()
-            
-            -- Compara com os anteriores
             local newBrainrots = getNewBrainrots(lastBrainrots, currentBrainrots)
             
             if #newBrainrots > 0 then
-                warn("[Hop] Novos pets detectados: " .. #newBrainrots)
+                local hasGood, goodName = hasGoodBrainrot(newBrainrots)
+                
+                if hasGood then
+                    foundGoodBrainrot = true
+                end
+                
                 notifyNewBrainrots(newBrainrots)
             end
             
-            -- Atualiza a lista anterior
             lastBrainrots = currentBrainrots
         end
         
-        warn("[Hop] 30 segundos de monitoramento concluídos, iniciando hop...")
+        task.spawn(startHopLoop)
     end
 end
-
--- FASE 2: Tenta fazer hop a cada 1s até conseguir
-local function startHopLoop()
-    while true do
-        -- Verifica se já mudou de servidor
-        if game.JobId ~= initialJobId then
-            warn("[Hop] Já está em outro servidor!")
-            break
-        end
-        
-        -- Pega um novo job da API
-        local newJob = getNewJobFromAPI()
-        
-        if newJob then
-            warn("[Hop] Tentando teleportar para job: " .. string.sub(newJob, 1, 8) .. "...")
-            local success = tryTeleport(newJob)
-            
-            if success then
-                -- Espera um pouco para ver se funcionou
-                task.wait(1)
-                if game.JobId ~= initialJobId then
-                    warn("[Hop] Teleport realizado com sucesso!")
-                    break
-                end
-            end
-        end
-        
-        task.wait(1) -- Espera 1 segundo antes da próxima tentativa
-    end
-end
-
-task.spawn(startHopLoop)
