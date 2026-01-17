@@ -77,6 +77,7 @@ local GOOD_BRAINROTS = {
     "Jolly Jolly Sahur",
     "Festive 67",
     "Los Spaghettis",
+    "Brunito Marsito",
 }
 
 local GOOD_BRAINROTS_MAP = {}
