@@ -431,7 +431,7 @@ else
         
         local lastBrainrots = {}
         local monitoringStart = tick()
-        local monitoringDuration = 14
+        local monitoringDuration = 20
         local foundGoodBrainrot = false
         
         while tick() - monitoringStart < monitoringDuration and not foundGoodBrainrot do
