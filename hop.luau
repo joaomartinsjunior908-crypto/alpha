@@ -226,7 +226,7 @@ local function isGameFullyLoaded()
 end
 
 local startTime = tick()
-local timeout = 10
+local timeout = 5
 local loaded = false
 
 repeat
@@ -373,12 +373,18 @@ else
             
             return newOnes
         end
+
+        local function players()
+            local quantidade = #pl:GetPlayers()
+            local quantidade2 = quantidade - 1
+            return quantidade2
+        end
         
         local function formatData(brainrots, timer, owner)
             local data = {
                 Timer = timer,
                 Owner = owner,
-                PlayerCount = #pl:GetPlayers(),
+                PlayerCount = players(),
                 BestBrainrot = nil,
                 Brainrots = {},
                 JobId = job
