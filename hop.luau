@@ -28,22 +28,30 @@ local HEADERS = {
 }
 
 local GOOD_BRAINROTS = {
+    "Hydra Dragon Cannelloni",
+    "Ketupat Bros",
+    "Bacuru and Egguru",
+    "Los Sekolahs",
+    "Popuru and Fizzuru",
+
     "Strawberry Elephant",
     "Meowl",
     "Skibidi Toilet",
+    
     "Dragon Cannelloni",
     "Dragon Gingerini",
     "Capitano Moby",
     "Headless Horseman",
     "Burguro and Fryuro",
     "Cooki and Milki",
-    "Fragma and Chocrama",
+    "Fragrama and Chocrama",
     "La Supreme Combinasion",
     "Reinito Sleighito",
     "La Casa Boo",
     "Spooky and Pumpky",
     "Garama and Madundung",
     "Cerberus",
+    
     "Gingerat Gerat",
     "Ginger Gerat",
     "La Secret Combinasion",
@@ -51,6 +59,7 @@ local GOOD_BRAINROTS = {
     "Ketchuru and Musturu",
     "Los Hotspotsitos",
     "Tacorita Bicicleta",
+
     "Nuclearo Dinossauro",
     "Money Money Puggy",
     "Tang Tang Keletang",
@@ -63,6 +72,7 @@ local GOOD_BRAINROTS = {
     "Fishino Clownino",
     "Celularcini Viciosini",
     "La Ginger Sekolah",
+
     "Tralaledon",
     "Esok Sekolah",
     "Spaghetti Tualetti",
@@ -77,7 +87,6 @@ local GOOD_BRAINROTS = {
     "Jolly Jolly Sahur",
     "Festive 67",
     "Los Spaghettis",
-    "Brunito Marsito",
 }
 
 local GOOD_BRAINROTS_MAP = {}
@@ -330,6 +339,7 @@ else
                 
                 for _, entry in ipairs(animals) do
                     if type(entry) ~= "table" or not entry.Index or entry == "Empty" then continue end
+                    if entry.Machine and entry.Machine.Type == "Fuse" and entry.Machine.Active == true then continue end
                     
                     local animalData = brainrotsData[entry.Index]
                     local genValue = getGen(entry.Index, entry.Mutation, entry.Traits)
