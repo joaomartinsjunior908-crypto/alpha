@@ -32,12 +32,10 @@ local GOOD_BRAINROTS = {
     "Ketupat Bros",
     "Bacuru and Egguru",
     "Los Sekolahs",
-    "Popuru and Fizzuru",
-
+    "Popcuru and Fizzuru",
     "Strawberry Elephant",
     "Meowl",
     "Skibidi Toilet",
-    
     "Dragon Cannelloni",
     "Dragon Gingerini",
     "Capitano Moby",
@@ -51,7 +49,6 @@ local GOOD_BRAINROTS = {
     "Spooky and Pumpky",
     "Garama and Madundung",
     "Cerberus",
-    
     "Gingerat Gerat",
     "Ginger Gerat",
     "La Secret Combinasion",
@@ -59,7 +56,6 @@ local GOOD_BRAINROTS = {
     "Ketchuru and Musturu",
     "Los Hotspotsitos",
     "Tacorita Bicicleta",
-
     "Nuclearo Dinossauro",
     "Money Money Puggy",
     "Tang Tang Keletang",
@@ -72,7 +68,6 @@ local GOOD_BRAINROTS = {
     "Fishino Clownino",
     "Celularcini Viciosini",
     "La Ginger Sekolah",
-
     "Tralaledon",
     "Esok Sekolah",
     "Spaghetti Tualetti",
