@@ -4,6 +4,7 @@ local ws = game:GetService("Workspace")
 local tps = game:GetService("TeleportService")
 local https = game:GetService("HttpService")
 local replicatedFirst = game:GetService("ReplicatedFirst")
+local CollectionService = game:GetService("CollectionService")
 
 local lp = pl.LocalPlayer or pl:GetPropertyChangedSignal("LocalPlayer"):Wait() or pl.LocalPlayer
 if not lp then
@@ -362,38 +363,41 @@ else
         
         local function getEsteiraBrainrots()
             local results = {}
-            local debris = ws:FindFirstChild("Debris")
-            if not debris then return results end
             
-            for _, b in debris:GetDescendants() do
-                if b.Name == "AnimalOverhead" then
-                    local displayName = b:FindFirstChild("DisplayName")
-                    local generation = b:FindFirstChild("Generation")
-                    local mutationGui = b:FindFirstChild("Mutation")
-                    
-                    if not displayName or not generation then continue end
-                    
-                    local name = displayName.Text or ""
-                    local gen = generation.Text or "N/A"
-                    local mutation = ""
-                    
-                    if mutationGui and mutationGui.Visible then
-                        mutation = mutationGui.Text or ""
-                    end
-                    
-                    local genNum = parseGenValue(gen)
-                    
-                    table.insert(results, {
-                        name = name,
-                        mutation = mutation,
-                        gen = gen,
-                        genNum = genNum,
-                        owner = "None",
-                        timer = "N/A",
-                        index = nil,
-                    })
+            local taggedAnimals = CollectionService:GetTagged("Animal")
+            for _, animal in taggedAnimals do
+                if not animal:IsA("Model") then continue end
+                
+                local index = animal:GetAttribute("Index")
+                local mutation = animal:GetAttribute("Mutation")
+                local traitsJson = animal:GetAttribute("Traits")
+                local traits = nil
+                
+                if traitsJson then
+                    pcall(function()
+                        traits = https:JSONDecode(traitsJson)
+                    end)
                 end
+                
+                if not index then continue end
+                
+                local animalData = brainrotsData[index]
+                local displayName = (animalData and animalData.DisplayName) or index
+                local genValue = getGen(index, mutation, traits)
+                local genNum = parseGenValue(genValue)
+                
+                table.insert(results, {
+                    name = displayName,
+                    mutation = mutation or "",
+                    gen = genValue,
+                    genNum = genNum,
+                    owner = "Esteira",
+                    timer = "N/A",
+                    index = index,
+                    traits = traits,
+                })
             end
+            
             return results
         end
         
