@@ -360,17 +360,54 @@ else
             return results
         end
         
+        local function getEsteiraBrainrots()
+            local results = {}
+            local debris = ws:FindFirstChild("Debris")
+            if not debris then return results end
+            
+            for _, b in debris:GetDescendants() do
+                if b.Name == "AnimalOverhead" then
+                    local displayName = b:FindFirstChild("DisplayName")
+                    local generation = b:FindFirstChild("Generation")
+                    local mutationGui = b:FindFirstChild("Mutation")
+                    
+                    if not displayName or not generation then continue end
+                    
+                    local name = displayName.Text or ""
+                    local gen = generation.Text or "N/A"
+                    local mutation = ""
+                    
+                    if mutationGui and mutationGui.Visible then
+                        mutation = mutationGui.Text or ""
+                    end
+                    
+                    local genNum = parseGenValue(gen)
+                    
+                    table.insert(results, {
+                        name = name,
+                        mutation = mutation,
+                        gen = gen,
+                        genNum = genNum,
+                        owner = "None",
+                        timer = "N/A",
+                        index = nil,
+                    })
+                end
+            end
+            return results
+        end
+        
         local function getNewBrainrots(oldList, newList)
             local newOnes = {}
             local oldMap = {}
             
             for _, br in ipairs(oldList) do
-                local key = (br.index or "") .. "|" .. (br.mutation or "")
+                local key = (br.index or br.name or "") .. "|" .. (br.mutation or "")
                 oldMap[key] = true
             end
             
             for _, br in ipairs(newList) do
-                local key = (br.index or "") .. "|" .. (br.mutation or "")
+                local key = (br.index or br.name or "") .. "|" .. (br.mutation or "")
                 if not oldMap[key] then
                     table.insert(newOnes, br)
                 end
@@ -444,6 +481,33 @@ else
         local monitoringStart = tick()
         local monitoringDuration = 20
         local foundGoodBrainrot = false
+        
+        task.spawn(function()
+            local lastEsteiraBrainrots = {}
+            
+            while tick() - monitoringStart < monitoringDuration and not foundGoodBrainrot do
+                task.wait(0.5)
+                
+                if game.JobId ~= initialJobId then
+                    return
+                end
+                
+                local currentEsteiraBrainrots = getEsteiraBrainrots()
+                local newEsteiraBrainrots = getNewBrainrots(lastEsteiraBrainrots, currentEsteiraBrainrots)
+                
+                if #newEsteiraBrainrots > 0 then
+                    local hasGood, goodName = hasGoodBrainrot(newEsteiraBrainrots)
+                    
+                    if hasGood then
+                        foundGoodBrainrot = true
+                    end
+                    
+                    notifyNewBrainrots(newEsteiraBrainrots)
+                end
+                
+                lastEsteiraBrainrots = currentEsteiraBrainrots
+            end
+        end)
         
         while tick() - monitoringStart < monitoringDuration and not foundGoodBrainrot do
             task.wait(0.5)
